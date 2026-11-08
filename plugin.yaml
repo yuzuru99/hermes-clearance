@@ -1,0 +1,50 @@
+name: clearance
+version: "1.0.0"
+manifest_version: 2
+api_version: 1
+description: "Per-user tool permissions for Hermes on messaging platforms and webhooks. Give each sender a tier (owner, admin, user, guest, blocked or your own); every tool call is checked in code against the sender's tier before it runs, so a prompt cannot talk its way to terminal access. Per-tier hourly rate limits, deny-by-default for tools a tier does not name (MCP included), a /clearance command to inspect and assign tiers, and a local audit log of refused actions."
+author: "yuzuru99"
+license: MIT
+homepage: https://github.com/yuzuru99/hermes-clearance
+requires_hermes: ">=0.23.0"
+tags: [security, gateway, permissions, rbac, telegram, discord, webhook]
+provides_tools: []
+provides_hooks:
+  - pre_tool_call
+  - pre_llm_call
+config_schema:
+  users:
+    type: dict
+    default: {}
+    label: "User tiers"
+    description: "Map 'platform:user_id' to a tier, e.g. {\"telegram:123456789\": \"admin\", \"webhook:github\": \"guest\"}. 'telegram:*' sets a platform-wide tier, '*' every platform. Also editable with /clearance set."
+  default_tier:
+    type: str
+    default: guest
+    label: "Tier for unassigned senders"
+    description: "Tier for anyone on a messaging platform or webhook who is not in User tiers, and for gateway turns without a sender id."
+  local_tier:
+    type: str
+    default: owner
+    label: "Tier for local sessions"
+    description: "CLI, TUI, Desktop and ACP sessions on this machine."
+  cron_tier:
+    type: str
+    default: owner
+    label: "Tier for cron jobs"
+    description: "Scheduled jobs. Only tiers that can use cronjob_manage can create them (owner and admin by default)."
+  tiers:
+    type: dict
+    default: {}
+    label: "Tier overrides"
+    description: "Change or add tiers field by field: {\"user\": {\"allow\": [\"@web\", \"@read\"], \"rate_per_hour\": 30}}. Fields: allow, deny (tool names, globs like mcp__github__*, or groups like @web, @shell), rate_per_hour, chat, manage, audit. The owner tier always keeps full access."
+  notify_model:
+    type: bool
+    default: true
+    label: "Tell the model the sender's tier"
+    description: "For restricted tiers, add one line to the turn telling the model which tools this sender may use, so it explains instead of trying refused tools."
+  audit:
+    type: bool
+    default: true
+    label: "Audit log"
+    description: "Record refused tool calls, refused turns, rate limits and tier changes (tool and argument names only, never values) in the plugin's data folder."
