@@ -42,7 +42,7 @@ config_schema:
     type: bool
     default: true
     label: "Tell the model the sender's tier"
-    description: "For restricted tiers, add one line to the turn telling the model which tools this sender may use, so it explains instead of trying refused tools."
+    description: "For messaging and webhook senders, add one line to the turn naming their current tier and allowed tools, so the model explains instead of trying refused tools and a tier change overrides earlier answers."
   audit:
     type: bool
     default: true

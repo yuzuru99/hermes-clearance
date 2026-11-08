@@ -36,14 +36,26 @@ DRIVER = textwrap.dedent(
     import model_tools
     from gateway.session_context import set_session_vars, clear_session_vars
 
-    out = {}
-    for label, platform, uid in (("guest", "telegram", "2002"), ("admin", "telegram", "1001"), ("local", "", "")):
+    from hermes_cli.plugins import get_plugin_command_handler
+
+    def call(platform, uid, label):
         tokens = set_session_vars(platform=platform, user_id=uid, user_name=label, chat_id="-1", chat_type="group")
         try:
-            res = model_tools.handle_function_call("terminal", {"command": "echo clearance-ran"}, task_id="t-" + label)
+            return model_tools.handle_function_call("terminal", {"command": "echo clearance-ran"}, task_id="t-" + label)
         finally:
             clear_session_vars(tokens)
-        out[label] = res
+
+    out = {}
+    for label, platform, uid in (("guest", "telegram", "2002"), ("admin", "telegram", "1001"), ("local", "", "")):
+        out[label] = call(platform, uid, label)
+
+    # Promote then demote the guest through the real /clearance handler and Hermes's real settings writer.
+    clearance = get_plugin_command_handler("clearance")
+    out["set"] = clearance("set telegram:2002 admin", platform="cli", source=None)
+    out["promoted"] = call("telegram", "2002", "promoted")
+    out["unset"] = clearance("unset telegram:2002", platform="cli", source=None)
+    import time; time.sleep(3.2)  # past the policy cache TTL as well
+    out["demoted"] = call("telegram", "2002", "demoted")
     print("RESULT" + json.dumps(out))
     """
 )
@@ -72,5 +84,8 @@ def test_real_dispatch_blocks_guest_and_allows_admin(tmp_path):
     assert "[clearance]" in out["guest"] and "clearance-ran" not in out["guest"]
     assert "clearance-ran" in out["admin"]
     assert "clearance-ran" in out["local"]
+    assert out["set"] == "telegram:2002 is now admin." and "clearance-ran" in out["promoted"]
+    assert out["unset"] == "telegram:2002 is now guest."
+    assert "[clearance]" in out["demoted"] and "clearance-ran" not in out["demoted"]  # demotion really landed
     audit = (home / "plugin-data" / "clearance" / "audit.jsonl").read_text(encoding="utf-8")
     assert '"who": "telegram:2002"' in audit and '"tool": "terminal"' in audit

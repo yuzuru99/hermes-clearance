@@ -233,6 +233,8 @@ def build_policy(get: Callable[[str, Any], Any]) -> Policy:
     raw_users = get("users", None)
     if isinstance(raw_users, Mapping):
         for k, v in raw_users.items():
+            if v is None or str(v).strip() == "":
+                continue  # unassigned (``/clearance unset`` writes null: settings writes deep-merge)
             key = normalize_user_key(k)
             tier = str(v).strip().lower()
             if key is None:

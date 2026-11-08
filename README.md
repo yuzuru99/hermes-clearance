@@ -38,7 +38,7 @@ Hermes:        /dev/vda  252G  15G  28G  35% /
 | Hook | What Clearance does |
 |---|---|
 | `pre_tool_call` | Reads the sender with Hermes's public seam `get_session_env("HERMES_SESSION_USER_ID")` (bound per message, propagated to tool worker threads), looks up their tier and **blocks** any tool the tier does not allow. The model gets a clear refusal; nothing runs. |
-| `pre_llm_call` | Blocks the turn for the `blocked` tier, applies the tier's hourly **rate limit**, and — for restricted tiers — adds one line telling the model which tools this sender may use, so it explains instead of trying. |
+| `pre_llm_call` | Blocks the turn for the `blocked` tier, applies the tier's hourly **rate limit**, and adds one line naming the sender's **current** tier and allowed tools (messaging and webhook senders only), so the model explains instead of trying — and a promotion or demotion overrides earlier answers in the chat. |
 | `/clearance` | Shows your identity and tier; lists tiers and users; reads the audit log (admin+); assigns tiers (owner only). Authorization comes from the platform's `source.user_id`, never from message text. |
 
 Decisions are **deny by default**: a tier only gets the tools it names. A tool Hermes or another
@@ -129,7 +129,7 @@ refused `terminal` call does not copy the command it carried into the log.
 
 - Hooks used: `pre_tool_call` (may **block** a tool call; never modifies arguments, never auto-approves,
   never touches Hermes's approval system), `pre_llm_call` (may **block** a turn for the `blocked` tier
-  or a rate limit, and appends one line of context for restricted tiers). Registers one slash command,
+  or a rate limit, and appends one line of context naming a gateway sender's current tier). Registers one slash command,
   `/clearance`. No tools, no middleware, no core overrides.
 - Reads only its own settings (`plugins.entries.clearance.settings`) and the session identity Hermes
   binds per message. Writes its settings when the owner runs `/clearance set|unset`, and its audit log

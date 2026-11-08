@@ -11,7 +11,7 @@ description: >-
   a /clearance command to inspect and assign tiers from chat, and a local audit log of refused actions.
   Disclosure - pre_tool_call may block a tool call (never modifies arguments, never approves, never
   touches the approval system); pre_llm_call may block a turn for the blocked tier or a rate limit and
-  appends one line of context naming the sender's tier for restricted tiers; registers /clearance; reads
+  appends one line of context naming the sender's current tier (gateway senders only); registers /clearance; reads
   only its own settings and the per-message session identity; writes its own settings on /clearance
   set|unset (owner only) and an audit log (tool and argument names, never values) in its plugin data
   directory; no network calls, no shell commands, no background processes, no telemetry, no credential

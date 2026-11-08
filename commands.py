@@ -118,10 +118,11 @@ class Commands:
         key = normalize_user_key(args[0])
         if key is None:
             return f"{args[0]!r} is not 'platform:user_id' (for example telegram:123456789)."
-        users = dict(policy.users)
         if sub == "unset":
-            if users.pop(key, None) is None:
+            if key not in policy.users:
                 return f"{key} has no tier assigned."
+            # Hermes deep-merges plugin settings, so a key cannot be dropped from the dict: null it.
+            value: Any = None
             new_tier = policy.default_tier
         else:
             if len(args) < 2:
@@ -129,8 +130,16 @@ class Commands:
             new_tier = args[1].strip().lower()
             if new_tier not in policy.tiers:
                 return f"Unknown tier {new_tier!r}. Tiers: {', '.join(sorted(policy.tiers, key=_tier_sort_key))}."
-            users[key] = new_tier
+            value = new_tier
+        users: dict[str, Any] = dict(policy.users)
+        users[key] = value
         self._set_config("users", users)
         self.rt.invalidate()
+        # Read the saved settings back: a change that did not land must never be reported as done.
+        effective = self.rt.policy().users.get(key, "")
+        expected = "" if value is None else new_tier
+        if effective != expected:
+            self.rt._audit("tier_set_failed", ident, policy.tier_for(ident).name, target=key, new_tier=new_tier)
+            return f"Could not save the change for {key} (still {effective or policy.default_tier}). Check config.yaml."
         self.rt._audit("tier_set", ident, policy.tier_for(ident).name, target=key, new_tier=new_tier)
         return f"{key} is now {new_tier}."

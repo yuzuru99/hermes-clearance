@@ -19,7 +19,14 @@ class FakeConfig:
         return self.settings.get(key, default)
 
     def set(self, key, value):
-        self.settings[key] = value
+        """Mimic Hermes's settings writer: mappings are DEEP-MERGED into what is saved."""
+        cur = self.settings.get(key)
+        if isinstance(cur, dict) and isinstance(value, dict):
+            merged = dict(cur)
+            merged.update(value)
+            self.settings[key] = merged
+        else:
+            self.settings[key] = value
 
 
 class Clock:
@@ -174,11 +181,19 @@ def test_rate_limit(tmp_path):
     assert rt.pre_llm_call().get("action") != "block"
 
 
-def test_context_note_only_for_restricted(tmp_path):
+def test_context_note_names_current_tier(tmp_path):
     rt, _, _, holder = make_rt(tmp_path, GUEST, users={"telegram:111": "admin"})
     note = rt.pre_llm_call()["context"]
     assert "guest" in note and "clarify" in note
-    holder["ident"] = ADMIN
+    holder["ident"] = ADMIN  # promoted / unrestricted senders are told too, so old refusals don't stick
+    note = rt.pre_llm_call()["context"]
+    assert "'admin'" in note and "every tool is allowed" in note
+    holder["ident"] = LOCAL
+    assert rt.pre_llm_call() is None
+
+
+def test_notify_model_off(tmp_path):
+    rt, *_ = make_rt(tmp_path, GUEST, notify_model=False)
     assert rt.pre_llm_call() is None
 
 
@@ -218,7 +233,8 @@ def test_owner_sets_and_unsets(tmp_path):
     assert cfg.settings["users"] == {"telegram:222": "user"}
     assert rt.policy().tier_name_for(GUEST) == "user"
     assert "now guest" in cmds.handle("unset telegram:222", platform="cli")
-    assert cfg.settings["users"] == {}
+    assert rt.policy().tier_name_for(GUEST) == "guest"  # really demoted, despite deep-merge saves
+    assert "has no tier" in cmds.handle("unset telegram:222", platform="cli")
     assert "Unknown tier" in cmds.handle("set telegram:222 root", platform="cli")
     assert "not 'platform:user_id'" in cmds.handle("set 222 user", platform="cli")
 
@@ -238,3 +254,24 @@ def test_caller_identity_from_enum_platform():
 
     assert caller_identity("", Src(P(), "5")).key == "discord:5"
     assert caller_identity("cli", None).kind == "local"
+
+
+def test_demotion_after_promotion_really_lands(tmp_path):
+    """Regression: unset used to drop the key from a dict that Hermes deep-merges, so it never left."""
+    rt, cfg, *_ = make_rt(tmp_path, LOCAL)
+    cmds = Commands(rt, cfg.set)
+    cmds.handle("set telegram:222 admin", platform="cli")
+    assert rt.policy().decide(GUEST, "terminal").allowed
+    cmds.handle("unset telegram:222", platform="cli")
+    assert not rt.policy().decide(GUEST, "terminal").allowed
+    cmds.handle("set telegram:222 admin", platform="cli")
+    cmds.handle("set telegram:222 guest", platform="cli")
+    assert not rt.policy().decide(GUEST, "terminal").allowed
+
+
+def test_failed_save_is_reported_not_claimed(tmp_path):
+    rt, cfg, *_ = make_rt(tmp_path, LOCAL)
+    cmds = Commands(rt, lambda k, v: None)  # a writer that silently drops the change
+    out = cmds.handle("set telegram:222 admin", platform="cli")
+    assert out.startswith("Could not save")
+    assert not rt.policy().decide(GUEST, "terminal").allowed
