@@ -275,3 +275,13 @@ def test_failed_save_is_reported_not_claimed(tmp_path):
     out = cmds.handle("set telegram:222 admin", platform="cli")
     assert out.startswith("Could not save")
     assert not rt.policy().decide(GUEST, "terminal").allowed
+
+
+def test_tier_change_is_announced_once(tmp_path):
+    rt, cfg, *_ = make_rt(tmp_path, GUEST)
+    assert "changed" not in rt.pre_llm_call()["context"]
+    cfg.settings["users"] = {"telegram:222": "admin"}
+    rt.invalidate()
+    note = rt.pre_llm_call()["context"]
+    assert "changed from 'guest' to 'admin'" in note and "out of date" in note
+    assert "changed" not in rt.pre_llm_call()["context"]

@@ -70,6 +70,7 @@ class Runtime:
         self._policy: tuple[float, Policy] | None = None
         self._lock = threading.Lock()
         self._logged_warnings: set[str] = set()
+        self._last_tier: dict[str, str] = {}
         self.rate = RateLimiter(clock)
         self.audit = AuditLog(audit_path)
 
@@ -153,9 +154,18 @@ class Runtime:
                 }
             # Local sessions need no note. Gateway senders always get the CURRENT tier, unrestricted
             # ones included, so a promotion or demotion overrides earlier refusals in the transcript.
+            previous = self._last_tier.get(ident.key)
+            self._last_tier[ident.key] = tier.name
             if ident.kind == "local" or not bool(self.setting("notify_model", True)):
                 return None
-            return {"context": self.context_note(ident, tier)}
+            note = self.context_note(ident, tier)
+            if previous and previous != tier.name:
+                note += (
+                    f" This sender's tier changed from '{previous}' to '{tier.name}' since their last message: "
+                    "earlier answers in this conversation that refused or allowed tools for them are out of date. "
+                    "Handle this request under the new tier."
+                )
+            return {"context": note}
         except Exception:
             logger.exception("clearance: pre_llm_call failed")
             if ident is not None and ident.kind == "local":

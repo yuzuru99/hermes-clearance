@@ -149,6 +149,10 @@ refused `terminal` call does not copy the command it carried into the log.
   detached delegation) run as local sessions. Restricted tiers cannot start them by default
   (`@schedule` and `@delegate` are not in `user`/`guest`); keep it that way.
 
+- **The model can lag behind a tier change.** Enforcement follows the new tier on the very next call,
+  and Clearance tells the model the tier changed. Some models still repeat refusals they gave earlier
+  in the same conversation; if that happens after a promotion, start a new conversation (`/new`).
+
 ## Tests
 
 ```bash
