@@ -38,8 +38,8 @@ DRIVER = textwrap.dedent(
 
     from hermes_cli.plugins import get_plugin_command_handler
 
-    def call(platform, uid, label):
-        tokens = set_session_vars(platform=platform, user_id=uid, user_name=label, chat_id="-1", chat_type="group")
+    def call(platform, uid, label, chat_type="group"):
+        tokens = set_session_vars(platform=platform, user_id=uid, user_name=label, chat_id="-1", chat_type=chat_type)
         try:
             return model_tools.handle_function_call("terminal", {"command": "echo clearance-ran"}, task_id="t-" + label)
         finally:
@@ -48,6 +48,10 @@ DRIVER = textwrap.dedent(
     out = {}
     for label, platform, uid in (("guest", "telegram", "2002"), ("admin", "telegram", "1001"), ("local", "", "")):
         out[label] = call(platform, uid, label)
+
+    # Hermes's own allow_admin_from (DM scope) makes 3003 owner in DMs only, with no Clearance entry.
+    out["hermes_admin_dm"] = call("telegram", "3003", "hermes_admin_dm", chat_type="dm")
+    out["hermes_admin_group"] = call("telegram", "3003", "hermes_admin_group", chat_type="group")
 
     # Promote then demote the guest through the real /clearance handler and Hermes's real settings writer.
     clearance = get_plugin_command_handler("clearance")
@@ -68,7 +72,8 @@ def _run(tmp_path: Path) -> dict:
     (home / "config.yaml").write_text(
         "plugins:\n  enabled: [clearance]\n  entries:\n    clearance:\n      settings:\n"
         "        users:\n          telegram:1001: admin\n"
-        "terminal:\n  backend: local\n",
+        "terminal:\n  backend: local\n"
+        "telegram:\n  allow_admin_from: ['3003']\n",
         encoding="utf-8",
     )
     env = dict(os.environ, HERMES_HOME=str(home))
@@ -84,6 +89,8 @@ def test_real_dispatch_blocks_guest_and_allows_admin(tmp_path):
     assert "[clearance]" in out["guest"] and "clearance-ran" not in out["guest"]
     assert "clearance-ran" in out["admin"]
     assert "clearance-ran" in out["local"]
+    assert "clearance-ran" in out["hermes_admin_dm"]  # allow_admin_from recognised through Hermes's loader
+    assert "[clearance]" in out["hermes_admin_group"] and "clearance-ran" not in out["hermes_admin_group"]
     assert out["set"] == "telegram:2002 is now admin." and "clearance-ran" in out["promoted"]
     assert out["unset"] == "telegram:2002 is now guest."
     assert "[clearance]" in out["demoted"] and "clearance-ran" not in out["demoted"]  # demotion really landed

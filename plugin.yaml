@@ -1,5 +1,5 @@
 name: clearance
-version: "1.0.0"
+version: "1.1.0"
 manifest_version: 2
 api_version: 1
 description: "Per-user tool permissions for Hermes on messaging platforms and webhooks. Give each sender a tier (owner, admin, user, guest, blocked or your own); every tool call is checked in code against the sender's tier before it runs, so a prompt cannot talk its way to terminal access. Per-tier hourly rate limits, deny-by-default for tools a tier does not name (MCP included), a /clearance command to inspect and assign tiers, and a local audit log of refused actions."
@@ -38,6 +38,11 @@ config_schema:
     default: {}
     label: "Tier overrides"
     description: "Change or add tiers field by field: {\"user\": {\"allow\": [\"@web\", \"@read\"], \"rate_per_hour\": 30}}. Fields: allow, deny (tool names, globs like mcp__github__*, or groups like @web, @shell), rate_per_hour, chat, manage, audit. The owner tier always keeps full access."
+  gateway_admin_tier:
+    type: str
+    default: owner
+    label: "Tier for Hermes admins"
+    description: "Senders Hermes already lists in allow_admin_from (DM chats) or group_allow_admin_from (group chats) get this tier automatically, so the bot owner is never locked out as a guest. An entry in User tiers still wins. Set to 'off' to disable."
   notify_model:
     type: bool
     default: true

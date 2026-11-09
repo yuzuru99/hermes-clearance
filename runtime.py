@@ -7,7 +7,7 @@ import os
 import threading
 import time
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterable, Mapping
 
 from .ledger import AuditLog, RateLimiter
 from .policy import GROUPS, Identity, Policy, Tier, build_policy, make_identity
@@ -37,7 +37,43 @@ def current_identity(env: Callable[[str], str] = session_env) -> Identity:
         env("HERMES_SESSION_USER_ID"),
         env("HERMES_SESSION_USER_NAME"),
         cron=env("HERMES_CRON_SESSION") == "1",
+        chat_type=env("HERMES_SESSION_CHAT_TYPE"),
     )
+
+
+def _id_set(raw: Any) -> frozenset[str]:
+    """An ``allow_admin_from`` value as Hermes accepts it: a list, a comma string or one scalar id."""
+    if raw is None:
+        return frozenset()
+    if isinstance(raw, (list, tuple, set, frozenset)):
+        items: Iterable[Any] = raw
+    elif isinstance(raw, str):
+        items = raw.split(",")
+    else:
+        items = (raw,)
+    return frozenset(s for s in (str(i).strip() for i in items) if s)
+
+
+# Hermes's admin list key per scope (a DM admin is not a group admin; lists are never cross-scope).
+_ADMIN_KEYS = {"dm": "allow_admin_from", "group": "group_allow_admin_from"}
+
+
+def load_gateway_admins() -> dict[str, frozenset[str]]:
+    """Hermes's slash-command admins per platform and scope, from the gateway config Hermes itself
+    loads (config.yaml, legacy gateway.json and env overrides, merged by Hermes's own loader)."""
+    from gateway.config import load_gateway_config
+
+    out: dict[str, frozenset[str]] = {}
+    for platform, pconfig in (getattr(load_gateway_config(), "platforms", None) or {}).items():
+        name = str(getattr(platform, "value", platform) or "").strip().lower()
+        extra = getattr(pconfig, "extra", None)
+        if not name or not isinstance(extra, dict):
+            continue
+        for scope, key in _ADMIN_KEYS.items():
+            ids = _id_set(extra.get(key))
+            if ids:
+                out[f"{name}:{scope}"] = ids
+    return out
 
 
 def default_audit_path() -> Path:
@@ -63,8 +99,10 @@ class Runtime:
         identity: Callable[[], Identity] = current_identity,
         audit_path: Callable[[], Path] = default_audit_path,
         clock: Callable[[], float] = time.monotonic,
+        gateway_admins: Callable[[], Mapping[str, Iterable[str]]] | None = load_gateway_admins,
     ) -> None:
         self._get_config = get_config
+        self._gateway_admins = gateway_admins
         self._identity = identity
         self._clock = clock
         self._policy: tuple[float, Policy] | None = None
@@ -87,7 +125,7 @@ class Runtime:
         now = self._clock()
         with self._lock:
             if self._policy is None or now - self._policy[0] > _POLICY_TTL:
-                pol = build_policy(self.setting)
+                pol = build_policy(self.setting, self._gateway_admins)
                 for w in pol.warnings:
                     if w not in self._logged_warnings:
                         self._logged_warnings.add(w)

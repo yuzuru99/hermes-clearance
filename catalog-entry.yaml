@@ -12,7 +12,8 @@ description: >-
   Disclosure - pre_tool_call may block a tool call (never modifies arguments, never approves, never
   touches the approval system); pre_llm_call may block a turn for the blocked tier or a rate limit and
   appends one line of context naming the sender's current tier (gateway senders only); registers /clearance; reads
-  only its own settings and the per-message session identity; writes its own settings on /clearance
+  only its own settings, the per-message session identity and Hermes's allow_admin_from /
+  group_allow_admin_from lists (so the operator's admins get the owner tier automatically); writes its own settings on /clearance
   set|unset (owner only) and an audit log (tool and argument names, never values) in its plugin data
   directory; no network calls, no shell commands, no background processes, no telemetry, no credential
   reads, no self-update. Not a sandbox: an allowed tool keeps its normal reach.
@@ -21,7 +22,7 @@ tier: community
 category: tools
 requires_hermes: ">=0.23.0"
 docs_url: https://github.com/yuzuru99/hermes-clearance#readme
-version: "1.0.0"
+version: "1.1.0"
 readme: true
 platforms: []
 capabilities:

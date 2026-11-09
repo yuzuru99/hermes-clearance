@@ -77,7 +77,12 @@ Requires Hermes `>=0.23.0`. No Python dependencies, no API keys.
 
 ## Configure
 
-Assign yourself owner from your phone's chat (local sessions are owner already):
+**Already using Hermes's `allow_admin_from`?** Then you are owner out of the box: senders Hermes lists
+in `allow_admin_from` get the `owner` tier in DMs, and those in `group_allow_admin_from` get it in
+group chats (the same scope rule Hermes uses for slash commands). An entry in `users` still wins, and
+`gateway_admin_tier` picks a different tier for them (`admin`, say) or turns this off (`off`).
+
+Otherwise, assign yourself owner from your phone's chat (local sessions are owner already):
 
 ```text
 /clearance                      # who am I, which tier, which tools
@@ -101,6 +106,7 @@ plugins:
           discord:*: user               # everyone on Discord
           webhook:github: guest         # a webhook route is its own sender
         default_tier: guest
+        gateway_admin_tier: owner       # tier for Hermes's allow_admin_from senders; "off" to disable
         tiers:
           user:
             allow: ["@web", "@read", "@vision"]
@@ -131,8 +137,10 @@ refused `terminal` call does not copy the command it carried into the log.
   never touches Hermes's approval system), `pre_llm_call` (may **block** a turn for the `blocked` tier
   or a rate limit, and appends one line of context naming a gateway sender's current tier). Registers one slash command,
   `/clearance`. No tools, no middleware, no core overrides.
-- Reads only its own settings (`plugins.entries.clearance.settings`) and the session identity Hermes
-  binds per message. Writes its settings when the owner runs `/clearance set|unset`, and its audit log
+- Reads its own settings (`plugins.entries.clearance.settings`), the session identity Hermes binds per
+  message (platform, user id, chat type), and Hermes's own `allow_admin_from` / `group_allow_admin_from`
+  lists through Hermes's gateway config loader, to recognise the operator's admins. Nothing else from
+  the gateway config is kept. Writes its settings when the owner runs `/clearance set|unset`, and its audit log
   in its own plugin data directory.
 - No network calls, no shell commands, no background processes, no telemetry, no self-update, no
   credential reads. Rate-limit counters live in memory and reset when the gateway restarts.
@@ -152,6 +160,14 @@ refused `terminal` call does not copy the command it carried into the log.
 - **The model can lag behind a tier change.** Enforcement follows the new tier on the very next call,
   and Clearance tells the model the tier changed. Some models still repeat refusals they gave earlier
   in the same conversation; if that happens after a promotion, start a new conversation (`/new`).
+
+## Changelog
+
+- **1.1.0** — Hermes's own admins (`allow_admin_from`, `group_allow_admin_from`) are recognised
+  automatically as `owner` (configurable with `gateway_admin_tier`), so enabling Clearance on a running
+  gateway no longer drops its operator to `guest`. `/clearance` shows when a tier comes from
+  `allow_admin_from`, and `/clearance users` lists those admins.
+- **1.0.0** — first release.
 
 ## Tests
 

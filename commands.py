@@ -24,7 +24,13 @@ def caller_identity(platform: str = "", source: Any = None) -> Identity:
         return make_identity(platform or "", "")
     plat = getattr(source, "platform", None)
     plat = getattr(plat, "value", plat) or platform or ""
-    return make_identity(str(plat), str(getattr(source, "user_id", "") or ""), str(getattr(source, "user_name", "") or ""))
+    chat_type = getattr(source, "chat_type", "") or ""
+    return make_identity(
+        str(plat),
+        str(getattr(source, "user_id", "") or ""),
+        str(getattr(source, "user_name", "") or ""),
+        chat_type=str(getattr(chat_type, "value", chat_type)),
+    )
 
 
 def _tier_sort_key(name: str) -> tuple[int, str]:
@@ -76,7 +82,10 @@ class Commands:
             f"{self.rt.rate.used(ident.key)}/{tier.rate_per_hour} messages this hour"
             if tier.rate_per_hour else "no rate limit"
         )
-        return f"You are {ident.label()}.\nTier: {tier.name}\nTools: {describe_tier(tier)}\nRate: {rate}"
+        via = ""
+        if ident.key not in policy.users and policy.gateway_admin_tier and policy.is_gateway_admin(ident):
+            via = " (Hermes admin: allow_admin_from)"
+        return f"You are {ident.label()}.\nTier: {tier.name}{via}\nTools: {describe_tier(tier)}\nRate: {rate}"
 
     def _tiers(self) -> str:
         policy = self.rt.policy()
@@ -93,10 +102,19 @@ class Commands:
 
     def _users(self) -> str:
         policy = self.rt.policy()
-        if not policy.users:
+        lines: list[str] = []
+        if policy.users:
+            rows = sorted(policy.users.items(), key=lambda kv: (_tier_sort_key(kv[1]), kv[0]))
+            lines += ["Users:"] + [f"  {k} -> {v}" for k, v in rows]
+        if policy.gateway_admin_tier and policy.gateway_admins:
+            lines.append(f"Hermes admins (allow_admin_from) -> {policy.gateway_admin_tier} unless listed above:")
+            for scope_key in sorted(policy.gateway_admins):
+                platform, _, scope = scope_key.partition(":")
+                ids = ", ".join(f"{platform}:{i}" for i in sorted(policy.gateway_admins[scope_key]))
+                lines.append(f"  {scope} chats: {ids}")
+        if not lines:
             return f"No users assigned. Everyone on a messaging platform is {policy.default_tier}."
-        rows = sorted(policy.users.items(), key=lambda kv: (_tier_sort_key(kv[1]), kv[0]))
-        return "Users:\n" + "\n".join(f"  {k} -> {v}" for k, v in rows)
+        return "\n".join(lines)
 
     def _audit(self, n: int) -> str:
         recs = self.rt.audit.tail(n)

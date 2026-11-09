@@ -42,6 +42,9 @@ DEFAULT_TIERS: dict[str, dict[str, Any]] = {
     "blocked": {"allow": [], "deny": ["*"], "rate_per_hour": 0, "chat": False, "manage": False, "audit": False},
 }
 
+# Chat types Hermes treats as a DM for ``allow_admin_from`` (``gateway/slash_access.py``).
+DM_CHAT_TYPES = frozenset({"dm", "direct", "private"})
+
 # Platforms whose turns come from the machine itself (CLI, TUI, Desktop, ACP editors).
 LOCAL_PLATFORMS = frozenset({"", "cli", "tui", "desktop", "local", "acp"})
 
@@ -70,6 +73,7 @@ class Identity:
     platform: str = ""
     user_id: str = ""
     user_name: str = ""
+    chat_type: str = ""  # "dm", "group", "channel", ... as the gateway reports it; "" when unknown
 
     def label(self) -> str:
         if self.user_name and self.kind == "gateway":
@@ -91,6 +95,10 @@ class Policy:
     default_tier: str = "guest"
     local_tier: str = "owner"
     cron_tier: str = "owner"
+    # Hermes's own slash-command admins (``allow_admin_from`` / ``group_allow_admin_from``), keyed
+    # "platform:dm" / "platform:group". They get ``gateway_admin_tier`` unless ``users`` names them.
+    gateway_admins: Mapping[str, frozenset[str]] = field(default_factory=dict)
+    gateway_admin_tier: str = ""  # "" = off
     warnings: list[str] = field(default_factory=list)
 
     # -------------------------------------------------------------- lookups
@@ -109,10 +117,30 @@ class Policy:
             return self.cron_tier
         if ident.kind == "unknown":
             return self.default_tier
-        for key in (ident.key, f"{ident.platform}:*", "*"):
+        if ident.key in self.users:  # an explicit per-user entry always wins
+            return self.users[ident.key]
+        if self.gateway_admin_tier and self.is_gateway_admin(ident):
+            return self.gateway_admin_tier
+        for key in (f"{ident.platform}:*", "*"):
             if key in self.users:
                 return self.users[key]
         return self.default_tier
+
+    def is_gateway_admin(self, ident: Identity) -> bool:
+        """Whether Hermes itself lists this sender as an admin for the chat the message came from.
+
+        Same scope rule as Hermes's ``policy_for_source``: a DM admin is not a group admin, and a
+        blank chat type resolves to whichever scope has admins (group on a tie)."""
+        if ident.kind != "gateway" or not ident.user_id or not self.gateway_admins:
+            return False
+        dm = self.gateway_admins.get(f"{ident.platform}:dm", frozenset())
+        group = self.gateway_admins.get(f"{ident.platform}:group", frozenset())
+        chat_type = ident.chat_type.strip().lower()
+        if chat_type:
+            ids = dm if chat_type in DM_CHAT_TYPES else group
+        else:
+            ids = dm if dm and not group else group
+        return ident.user_id in ids
 
     def tier_for(self, ident: Identity) -> Tier:
         return self.tier_named(self.tier_name_for(ident))
@@ -226,7 +254,10 @@ def normalize_user_key(key: Any) -> str | None:
     return f"{platform}:{uid}"
 
 
-def build_policy(get: Callable[[str, Any], Any]) -> Policy:
+def build_policy(
+    get: Callable[[str, Any], Any],
+    gateway_admins: Callable[[], Mapping[str, Iterable[str]]] | None = None,
+) -> Policy:
     warnings: list[str] = []
     tiers = build_tiers(get("tiers", None), warnings)
     users: dict[str, str] = {}
@@ -254,12 +285,30 @@ def build_policy(get: Callable[[str, Any], Any]) -> Policy:
             return default
         return value
 
+    admin_tier = str(get("gateway_admin_tier", "owner") or "").strip().lower()
+    if admin_tier in ("off", "none", "false", "no"):
+        admin_tier = ""
+    if admin_tier and admin_tier not in tiers:
+        warnings.append(f"gateway_admin_tier {admin_tier!r} is not a tier; Hermes admins get no tier of their own")
+        admin_tier = ""
+    admins: dict[str, frozenset[str]] = {}
+    if admin_tier and gateway_admins is not None:
+        try:
+            for scope_key, ids in (gateway_admins() or {}).items():
+                clean = frozenset(str(i).strip() for i in ids if str(i).strip())
+                if clean:
+                    admins[str(scope_key).lower()] = clean
+        except Exception as exc:  # unreadable gateway config: promote nobody (fail closed)
+            warnings.append(f"could not read Hermes allow_admin_from ({type(exc).__name__}); no automatic admins")
+
     return Policy(
         tiers=tiers,
         users=users,
         default_tier=_tier_setting("default_tier", "guest"),
         local_tier=_tier_setting("local_tier", "owner"),
         cron_tier=_tier_setting("cron_tier", "owner"),
+        gateway_admins=admins,
+        gateway_admin_tier=admin_tier,
         warnings=warnings,
     )
 
@@ -267,9 +316,12 @@ def build_policy(get: Callable[[str, Any], Any]) -> Policy:
 # ------------------------------------------------------------------ identity
 
 
-def make_identity(platform: str, user_id: str, user_name: str = "", *, cron: bool = False) -> Identity:
+def make_identity(
+    platform: str, user_id: str, user_name: str = "", *, cron: bool = False, chat_type: str = ""
+) -> Identity:
     platform = (platform or "").strip().lower()
     user_id = (user_id or "").strip()
+    chat_type = (chat_type or "").strip().lower()
     if cron:
         return Identity("cron", "cron", platform, user_id, user_name)
     if platform in LOCAL_PLATFORMS and not user_id:
@@ -279,7 +331,7 @@ def make_identity(platform: str, user_id: str, user_name: str = "", *, cron: boo
         return Identity("unknown", f"{platform or 'gateway'}:?", platform, "", user_name)
     # Webhook routes already carry their platform ("webhook:github"): don't double it.
     uid = user_id[len(platform) + 1:] if user_id.lower().startswith(platform + ":") else user_id
-    return Identity("gateway", f"{platform}:{uid}", platform, uid, user_name)
+    return Identity("gateway", f"{platform}:{uid}", platform, uid, user_name, chat_type)
 
 
 def describe_tier(tier: Tier) -> str:

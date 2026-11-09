@@ -37,11 +37,17 @@ class Clock:
         return self.t
 
 
-def make_rt(tmp_path: Path, ident, **settings):
+def make_rt(tmp_path: Path, ident, admins=None, **settings):
     cfg = FakeConfig(**settings)
     clock = Clock()
-    holder = {"ident": ident}
-    rt = Runtime(cfg.get, identity=lambda: holder["ident"], audit_path=lambda: tmp_path / "audit.jsonl", clock=clock)
+    holder = {"ident": ident, "admins": admins or {}}
+    rt = Runtime(
+        cfg.get,
+        identity=lambda: holder["ident"],
+        audit_path=lambda: tmp_path / "audit.jsonl",
+        clock=clock,
+        gateway_admins=lambda: holder["admins"],
+    )
     return rt, cfg, clock, holder
 
 
@@ -285,3 +291,72 @@ def test_tier_change_is_announced_once(tmp_path):
     note = rt.pre_llm_call()["context"]
     assert "changed from 'guest' to 'admin'" in note and "out of date" in note
     assert "changed" not in rt.pre_llm_call()["context"]
+
+
+# ------------------------------------------------- Hermes allow_admin_from (v1.1.0)
+
+OWNER_DM = make_identity("telegram", "777", "Owner Olga", chat_type="dm")
+OWNER_GROUP = make_identity("telegram", "777", "Owner Olga", chat_type="group")
+ADMINS = {"telegram:dm": ["777"]}
+
+
+def test_hermes_dm_admin_is_owner_without_any_clearance_config(tmp_path):
+    rt, *_ = make_rt(tmp_path, OWNER_DM, admins=ADMINS)
+    assert rt.policy().tier_name_for(OWNER_DM) == "owner"
+    assert rt.pre_tool_call("terminal", {"command": "id"}) is None
+
+
+def test_dm_admin_is_not_a_group_admin(tmp_path):
+    rt, *_ = make_rt(tmp_path, OWNER_GROUP, admins=ADMINS)
+    assert rt.policy().tier_name_for(OWNER_GROUP) == "guest"
+    assert rt.pre_tool_call("terminal", {"command": "id"})["action"] == "block"
+
+
+def test_group_admin_list_and_blank_chat_type(tmp_path):
+    admins = {"telegram:group": ["777"]}
+    pol = make_rt(tmp_path, OWNER_GROUP, admins=admins)[0].policy()
+    assert pol.tier_name_for(OWNER_GROUP) == "owner"
+    assert pol.tier_name_for(make_identity("telegram", "777", chat_type="")) == "owner"
+    assert pol.tier_name_for(make_identity("telegram", "777", chat_type="private")) == "guest"
+    assert pol.tier_name_for(make_identity("discord", "777", chat_type="group")) == "guest"
+
+
+def test_explicit_user_entry_beats_hermes_admin_but_wildcard_does_not(tmp_path):
+    rt, *_ = make_rt(tmp_path, OWNER_DM, admins=ADMINS, users={"telegram:777": "user"})
+    assert rt.policy().tier_name_for(OWNER_DM) == "user"
+    rt2, *_ = make_rt(tmp_path, OWNER_DM, admins=ADMINS, users={"telegram:*": "blocked"})
+    assert rt2.policy().tier_name_for(OWNER_DM) == "owner"
+
+
+def test_gateway_admin_tier_setting(tmp_path):
+    assert make_rt(tmp_path, OWNER_DM, admins=ADMINS, gateway_admin_tier="admin")[0].policy().tier_name_for(OWNER_DM) == "admin"
+    assert make_rt(tmp_path, OWNER_DM, admins=ADMINS, gateway_admin_tier="off")[0].policy().tier_name_for(OWNER_DM) == "guest"
+    pol = make_rt(tmp_path, OWNER_DM, admins=ADMINS, gateway_admin_tier="nope")[0].policy()
+    assert pol.tier_name_for(OWNER_DM) == "guest" and any("gateway_admin_tier" in w for w in pol.warnings)
+
+
+def test_unreadable_gateway_config_promotes_nobody(tmp_path):
+    def boom():
+        raise RuntimeError("bad yaml")
+    cfg = FakeConfig()
+    rt = Runtime(cfg.get, identity=lambda: OWNER_DM, audit_path=lambda: tmp_path / "a.jsonl", gateway_admins=boom)
+    pol = rt.policy()
+    assert pol.tier_name_for(OWNER_DM) == "guest"
+    assert rt.pre_tool_call("terminal", {})["action"] == "block"
+
+
+def test_hermes_admin_can_manage_and_sees_why(tmp_path):
+    rt, cfg, *_ = make_rt(tmp_path, OWNER_DM, admins=ADMINS)
+    cmds = Commands(rt, cfg.set)
+
+    class Src:
+        platform = "telegram"
+        user_id = "777"
+        user_name = "Owner Olga"
+        chat_type = "dm"
+
+    assert "allow_admin_from" in cmds.handle("", source=Src())
+    assert cmds.handle("set telegram:2002 user", source=Src()) == "telegram:2002 is now user."
+    assert "dm chats: telegram:777" in cmds.handle("users", source=Src())
+    Src.chat_type = "group"
+    assert cmds.handle("set telegram:2002 admin", source=Src()).startswith("Only the owner")
